@@ -14,6 +14,16 @@ import { packAndExtract } from "./pack";
 import { rewriteWorkspaceDependencies, writeAdaptedManifest } from "./manifest";
 import { readPnpmLockfile, pruneLockfile, writePrunedLockfile } from "./lockfile";
 
+function hasNodeModulesSegment(rootDir: string, filePath: string): boolean {
+  const relativePath = path.relative(rootDir, filePath);
+  if (!relativePath || relativePath.startsWith("..")) {
+    return false;
+  }
+
+  const segments = relativePath.split(path.sep);
+  return segments.includes("node_modules");
+}
+
 function copyPackageSource(sourceDir: string, destDir: string): void {
   fs.ensureDirSync(destDir);
 
@@ -27,7 +37,7 @@ function copyPackageSource(sourceDir: string, destDir: string): void {
     const destPath = path.join(destDir, item);
 
     fs.copySync(srcPath, destPath, {
-      filter: (src) => !src.includes("node_modules"),
+      filter: (src) => !hasNodeModulesSegment(sourceDir, src),
     });
   }
 }

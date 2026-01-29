@@ -2,10 +2,6 @@ import * as path from "path";
 import * as fs from "fs-extra";
 import { PackageManifest, WorkspaceRegistry } from "./types";
 
-function isWorkspaceProtocol(version: string): boolean {
-  return version.startsWith("workspace:");
-}
-
 function getRelativePath(from: string, to: string): string {
   const relativePath = path.relative(from, to);
   if (!relativePath.startsWith(".")) {
@@ -35,12 +31,7 @@ export function rewriteWorkspaceDependencies(
 
     const result: Record<string, string> = {};
     for (const [depName, depVersion] of Object.entries(deps)) {
-      if (isWorkspaceProtocol(depVersion) && registry.has(depName)) {
-        const safeName = depName.replace(/^@/, "").replace(/\//g, "-");
-        const depDir = path.join(workspacesDir, safeName);
-        const relativePath = getRelativePath(manifestDir, depDir);
-        result[depName] = `file:${relativePath}`;
-      } else if (internalDeps.has(depName) && registry.has(depName)) {
+      if (internalDeps.has(depName) && registry.has(depName)) {
         const safeName = depName.replace(/^@/, "").replace(/\//g, "-");
         const depDir = path.join(workspacesDir, safeName);
         const relativePath = getRelativePath(manifestDir, depDir);

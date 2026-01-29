@@ -57,8 +57,11 @@ export function pruneLockfile(
 
   pruned.importers = {};
   for (const [importerPath, importerData] of Object.entries(lockfile.importers)) {
-    const normalizedPath = importerPath === "." ? targetRelativeDir : importerPath;
-    if (relevantDirs.has(normalizedPath) || relevantDirs.has(importerPath)) {
+    if (importerPath === "." && targetRelativeDir !== ".") {
+      continue;
+    }
+
+    if (relevantDirs.has(importerPath)) {
       pruned.importers[importerPath] = importerData;
     }
   }
