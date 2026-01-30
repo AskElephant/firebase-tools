@@ -138,6 +138,7 @@ export async function isolateWorkspace(options: IsolateOptions): Promise<Isolate
       targetPackage.rootRelativeDir,
       internalDeps,
       registry,
+      { outputDir, workspacesDir },
     );
     writePrunedLockfile(prunedLockfile, path.join(outputDir, "pnpm-lock.yaml"));
   } else {
