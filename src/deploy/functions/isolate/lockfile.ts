@@ -120,6 +120,18 @@ export function pruneLockfile(
     }
   }
 
+  const importerPathToNewPath = new Map<string, string>();
+  if (rewriteContext) {
+    importerPathToNewPath.set(targetRelativeDir, ".");
+    for (const depName of internalDeps) {
+      const pkg = registry.get(depName);
+      if (pkg) {
+        const safeName = depName.replace(/^@/, "").replace(/\//g, "-");
+        importerPathToNewPath.set(pkg.rootRelativeDir, `workspaces/${safeName}`);
+      }
+    }
+  }
+
   pruned.importers = {};
   for (const [importerPath, importerData] of Object.entries(lockfile.importers)) {
     if (importerPath === "." && targetRelativeDir !== ".") {
@@ -128,6 +140,7 @@ export function pruneLockfile(
 
     if (relevantDirs.has(importerPath)) {
       const importerOutputDir = importerPathToOutputDir.get(importerPath);
+      const newImporterPath = importerPathToNewPath.get(importerPath) ?? importerPath;
       if (rewriteContext && importerOutputDir) {
         const rewrittenImporter: ImporterData = { ...importerData };
         rewrittenImporter.dependencies = rewriteImporterDependencies(
@@ -148,9 +161,9 @@ export function pruneLockfile(
           importerOutputDir,
           rewriteContext.workspacesDir,
         );
-        pruned.importers[importerPath] = rewrittenImporter;
+        pruned.importers[newImporterPath] = rewrittenImporter;
       } else {
-        pruned.importers[importerPath] = importerData;
+        pruned.importers[newImporterPath] = importerData;
       }
     }
   }
