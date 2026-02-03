@@ -82,7 +82,7 @@
   },
   "homepage": "https://github.com/firebase/firebase-tools",
   "publishConfig": {
-    "registry": "https://registry.npmjs.org",
+    "registry": "https://npm.pkg.github.com",
     "access": "public"
   },
   "nyc": {
