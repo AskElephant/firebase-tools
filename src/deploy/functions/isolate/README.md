@@ -30,11 +30,11 @@ console.log(result.packagesIncluded); // List of included packages
 
 ## Options
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `projectDir` | `string` | Root directory of the Firebase project |
-| `sourceDir` | `string` | Directory of the functions package to isolate |
-| `outputDir` | `string` | Destination for the isolated output |
+| Option                   | Type      | Description                                              |
+| ------------------------ | --------- | -------------------------------------------------------- |
+| `projectDir`             | `string`  | Root directory of the Firebase project                   |
+| `sourceDir`              | `string`  | Directory of the functions package to isolate            |
+| `outputDir`              | `string`  | Destination for the isolated output                      |
 | `includeDevDependencies` | `boolean` | Whether to include devDependencies of the target package |
 
 ## Output Structure
