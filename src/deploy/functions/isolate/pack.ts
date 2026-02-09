@@ -2,7 +2,7 @@ import * as path from "path";
 import * as fs from "fs-extra";
 import { spawn } from "cross-spawn";
 import { FirebaseError } from "../../../error";
-import { WorkspacePackage } from "./types";
+import { WorkspacePackage, toSafeName } from "./types";
 import { logger } from "../../../logger";
 
 function runCommand(
@@ -100,7 +100,7 @@ export async function packAndExtract(
 
   try {
     const tarballPath = await packWorkspacePackage(pkg, tempDir);
-    const destDir = path.join(workspacesDir, pkg.name.replace(/^@/, "").replace(/\//g, "-"));
+    const destDir = path.join(workspacesDir, toSafeName(pkg.name));
 
     await unpackTarball(tarballPath, destDir);
 

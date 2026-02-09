@@ -82,6 +82,7 @@ export function findInternalDependencies(
 ): Set<string> {
   const visited = new Set<string>();
   const queue: string[] = [pkgName];
+  let isTargetPackage = true;
 
   while (queue.length > 0) {
     const current = queue.shift()!;
@@ -96,7 +97,7 @@ export function findInternalDependencies(
     }
 
     const deps = pkg.manifest.dependencies || {};
-    const devDeps = includeDevDeps ? pkg.manifest.devDependencies || {} : {};
+    const devDeps = includeDevDeps && isTargetPackage ? pkg.manifest.devDependencies || {} : {};
     const optionalDeps = pkg.manifest.optionalDependencies || {};
     const allDeps = { ...deps, ...devDeps, ...optionalDeps };
 
@@ -105,6 +106,8 @@ export function findInternalDependencies(
         queue.push(depName);
       }
     }
+
+    isTargetPackage = false;
   }
 
   visited.delete(pkgName);

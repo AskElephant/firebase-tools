@@ -27,3 +27,21 @@ export interface IsolateResult {
   isolatedDir: string;
   packagesIncluded: string[];
 }
+
+export function getRelativePath(from: string, to: string): string {
+  const path = require("path");
+  const relativePath = path.relative(from, to);
+  if (!relativePath.startsWith(".")) {
+    return `./${relativePath}`;
+  }
+  return relativePath;
+}
+
+export function toSafeName(name: string): string {
+  if (name.startsWith("@")) {
+    const withoutAt = name.slice(1);
+    const [scope, pkg] = withoutAt.split("/");
+    return `${scope}__${pkg}`;
+  }
+  return name;
+}

@@ -3,7 +3,7 @@ import * as fs from "fs-extra";
 import { FirebaseError } from "../../../error";
 import { logger } from "../../../logger";
 import { logLabeledBullet } from "../../../utils";
-import { IsolateOptions, IsolateResult, WorkspaceRegistry } from "./types";
+import { IsolateOptions, IsolateResult, WorkspaceRegistry, toSafeName } from "./types";
 import {
   findWorkspaceRoot,
   buildWorkspaceRegistry,
@@ -119,8 +119,7 @@ export async function isolateWorkspace(options: IsolateOptions): Promise<Isolate
       await packAndExtract(depPackage, workspacesDir);
       packagesIncluded.push(depName);
 
-      const safeName = depName.replace(/^@/, "").replace(/\//g, "-");
-      const depDir = path.join(workspacesDir, safeName);
+      const depDir = path.join(workspacesDir, toSafeName(depName));
       const depManifestPath = path.join(depDir, "package.json");
 
       if (fs.existsSync(depManifestPath)) {
@@ -144,17 +143,12 @@ export async function isolateWorkspace(options: IsolateOptions): Promise<Isolate
   const targetManifestPath = path.join(outputDir, "package.json");
   if (fs.existsSync(targetManifestPath)) {
     const targetManifest = fs.readJsonSync(targetManifestPath);
-    const rewrittenManifest = rewriteWorkspaceDependencies(
-      targetManifest,
-      registry,
-      internalDeps,
-      {
-        manifestDir: outputDir,
-        workspacesDir,
-        outputDir,
-        targetPackageName: targetPackage.name,
-      },
-    );
+    const rewrittenManifest = rewriteWorkspaceDependencies(targetManifest, registry, internalDeps, {
+      manifestDir: outputDir,
+      workspacesDir,
+      outputDir,
+      targetPackageName: targetPackage.name,
+    });
     writeAdaptedManifest(rewrittenManifest, targetManifestPath);
   }
 

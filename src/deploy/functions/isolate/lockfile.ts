@@ -2,7 +2,7 @@ import * as path from "path";
 import * as fs from "fs-extra";
 import * as yaml from "yaml";
 import { logger } from "../../../logger";
-import { WorkspaceRegistry } from "./types";
+import { WorkspaceRegistry, getRelativePath, toSafeName } from "./types";
 
 interface PnpmLockfile {
   lockfileVersion: string | number;
@@ -27,14 +27,6 @@ interface RewriteContext {
   outputDir: string;
   workspacesDir: string;
   targetPackageName: string;
-}
-
-function getRelativePath(from: string, to: string): string {
-  const relativePath = path.relative(from, to);
-  if (!relativePath.startsWith(".")) {
-    return `./${relativePath}`;
-  }
-  return relativePath;
 }
 
 /**
@@ -70,15 +62,14 @@ function rewriteImporterDependencies(
 
   const result: Record<string, DependencyEntry> = {};
   for (const [depName, depInfo] of Object.entries(deps)) {
-    if (depName === targetPackageName && depInfo.specifier?.startsWith("workspace:")) {
+    if (depName === targetPackageName) {
       const relativePath = getRelativePath(importerOutputDir, outputDir);
       result[depName] = {
         specifier: `file:${relativePath}`,
         version: `link:${relativePath}`,
       };
-    } else if (internalDeps.has(depName) && depInfo.specifier?.startsWith("workspace:")) {
-      const safeName = depName.replace(/^@/, "").replace(/\//g, "-");
-      const depDir = path.join(workspacesDir, safeName);
+    } else if (internalDeps.has(depName)) {
+      const depDir = path.join(workspacesDir, toSafeName(depName));
       const relativePath = getRelativePath(importerOutputDir, depDir);
       result[depName] = {
         specifier: `file:${relativePath}`,
@@ -123,8 +114,11 @@ export function pruneLockfile(
     for (const depName of internalDeps) {
       const pkg = registry.get(depName);
       if (pkg) {
-        const safeName = depName.replace(/^@/, "").replace(/\//g, "-");
-        importerPathToOutputDir.set(pkg.rootRelativeDir, path.join(rewriteContext.workspacesDir, safeName));
+        const safeName = toSafeName(depName);
+        importerPathToOutputDir.set(
+          pkg.rootRelativeDir,
+          path.join(rewriteContext.workspacesDir, safeName),
+        );
       }
     }
   }
@@ -135,7 +129,7 @@ export function pruneLockfile(
     for (const depName of internalDeps) {
       const pkg = registry.get(depName);
       if (pkg) {
-        const safeName = depName.replace(/^@/, "").replace(/\//g, "-");
+        const safeName = toSafeName(depName);
         importerPathToNewPath.set(pkg.rootRelativeDir, `workspaces/${safeName}`);
       }
     }
