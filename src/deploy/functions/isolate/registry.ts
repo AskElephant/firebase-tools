@@ -28,7 +28,10 @@ export function findWorkspaceRoot(startDir: string): string | null {
 export function readWorkspaceConfig(workspaceRoot: string): string[] {
   const workspaceYamlPath = path.join(workspaceRoot, "pnpm-workspace.yaml");
   const content = fs.readFileSync(workspaceYamlPath, "utf-8");
-  const config = yaml.parse(content) as { packages?: string[] };
+  const config = yaml.parse(content) as { packages?: string[] } | null;
+  if (!config) {
+    return [];
+  }
   return config.packages || [];
 }
 
@@ -94,7 +97,8 @@ export function findInternalDependencies(
 
     const deps = pkg.manifest.dependencies || {};
     const devDeps = includeDevDeps ? pkg.manifest.devDependencies || {} : {};
-    const allDeps = { ...deps, ...devDeps };
+    const optionalDeps = pkg.manifest.optionalDependencies || {};
+    const allDeps = { ...deps, ...devDeps, ...optionalDeps };
 
     for (const depName of Object.keys(allDeps)) {
       if (registry.has(depName) && !visited.has(depName)) {

@@ -50,10 +50,29 @@ function writePnpmWorkspaceYaml(outputDir: string): void {
 /**
  *
  */
+function validateOutputDir(sourceDir: string, outputDir: string): void {
+  const resolvedSource = path.resolve(sourceDir);
+  const resolvedOutput = path.resolve(outputDir);
+
+  if (resolvedSource === resolvedOutput) {
+    throw new FirebaseError(
+      `Output directory cannot be the same as source directory: ${resolvedOutput}`,
+    );
+  }
+
+  if (resolvedSource.startsWith(resolvedOutput + path.sep)) {
+    throw new FirebaseError(
+      `Output directory cannot be a parent of source directory: ${resolvedOutput}`,
+    );
+  }
+}
+
 export async function isolateWorkspace(options: IsolateOptions): Promise<IsolateResult> {
   const { sourceDir, outputDir, includeDevDependencies } = options;
 
   logLabeledBullet("functions", "isolating workspace dependencies...");
+
+  validateOutputDir(sourceDir, outputDir);
 
   const workspaceRoot = findWorkspaceRoot(sourceDir);
   if (!workspaceRoot) {
@@ -110,8 +129,12 @@ export async function isolateWorkspace(options: IsolateOptions): Promise<Isolate
           depManifest,
           registry,
           internalDeps,
-          depDir,
-          workspacesDir,
+          {
+            manifestDir: depDir,
+            workspacesDir,
+            outputDir,
+            targetPackageName: targetPackage.name,
+          },
         );
         writeAdaptedManifest(rewrittenDepManifest, depManifestPath);
       }
@@ -125,8 +148,12 @@ export async function isolateWorkspace(options: IsolateOptions): Promise<Isolate
       targetManifest,
       registry,
       internalDeps,
-      outputDir,
-      workspacesDir,
+      {
+        manifestDir: outputDir,
+        workspacesDir,
+        outputDir,
+        targetPackageName: targetPackage.name,
+      },
     );
     writeAdaptedManifest(rewrittenManifest, targetManifestPath);
   }
@@ -138,7 +165,7 @@ export async function isolateWorkspace(options: IsolateOptions): Promise<Isolate
       targetPackage.rootRelativeDir,
       internalDeps,
       registry,
-      { outputDir, workspacesDir },
+      { outputDir, workspacesDir, targetPackageName: targetPackage.name },
     );
     writePrunedLockfile(prunedLockfile, path.join(outputDir, "pnpm-lock.yaml"));
   } else {

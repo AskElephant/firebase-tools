@@ -3,6 +3,7 @@ export interface PackageManifest {
   version: string;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
   [key: string]: unknown;
 }
 

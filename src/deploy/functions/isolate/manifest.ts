@@ -13,13 +13,20 @@ function getRelativePath(from: string, to: string): string {
 /**
  *
  */
+interface RewriteOptions {
+  manifestDir: string;
+  workspacesDir: string;
+  outputDir: string;
+  targetPackageName: string;
+}
+
 export function rewriteWorkspaceDependencies(
   manifest: PackageManifest,
   registry: WorkspaceRegistry,
   internalDeps: Set<string>,
-  manifestDir: string,
-  workspacesDir: string,
+  options: RewriteOptions,
 ): PackageManifest {
+  const { manifestDir, workspacesDir, outputDir, targetPackageName } = options;
   const rewritten = { ...manifest };
 
   const rewriteDeps = (
@@ -31,7 +38,10 @@ export function rewriteWorkspaceDependencies(
 
     const result: Record<string, string> = {};
     for (const [depName, depVersion] of Object.entries(deps)) {
-      if (internalDeps.has(depName) && registry.has(depName)) {
+      if (depName === targetPackageName && depVersion.startsWith("workspace:")) {
+        const relativePath = getRelativePath(manifestDir, outputDir);
+        result[depName] = `file:${relativePath}`;
+      } else if (internalDeps.has(depName) && registry.has(depName)) {
         const safeName = depName.replace(/^@/, "").replace(/\//g, "-");
         const depDir = path.join(workspacesDir, safeName);
         const relativePath = getRelativePath(manifestDir, depDir);
@@ -49,6 +59,10 @@ export function rewriteWorkspaceDependencies(
 
   if (rewritten.devDependencies) {
     rewritten.devDependencies = rewriteDeps(rewritten.devDependencies);
+  }
+
+  if (rewritten.optionalDependencies) {
+    rewritten.optionalDependencies = rewriteDeps(rewritten.optionalDependencies);
   }
 
   return rewritten;

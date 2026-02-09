@@ -26,6 +26,7 @@ interface ImporterData {
 interface RewriteContext {
   outputDir: string;
   workspacesDir: string;
+  targetPackageName: string;
 }
 
 function getRelativePath(from: string, to: string): string {
@@ -60,6 +61,8 @@ function rewriteImporterDependencies(
   internalDeps: Set<string>,
   importerOutputDir: string,
   workspacesDir: string,
+  targetPackageName: string,
+  outputDir: string,
 ): Record<string, DependencyEntry> | undefined {
   if (!deps) {
     return deps;
@@ -67,7 +70,13 @@ function rewriteImporterDependencies(
 
   const result: Record<string, DependencyEntry> = {};
   for (const [depName, depInfo] of Object.entries(deps)) {
-    if (internalDeps.has(depName) && depInfo.specifier?.startsWith("workspace:")) {
+    if (depName === targetPackageName && depInfo.specifier?.startsWith("workspace:")) {
+      const relativePath = getRelativePath(importerOutputDir, outputDir);
+      result[depName] = {
+        specifier: `file:${relativePath}`,
+        version: `link:${relativePath}`,
+      };
+    } else if (internalDeps.has(depName) && depInfo.specifier?.startsWith("workspace:")) {
       const safeName = depName.replace(/^@/, "").replace(/\//g, "-");
       const depDir = path.join(workspacesDir, safeName);
       const relativePath = getRelativePath(importerOutputDir, depDir);
@@ -148,18 +157,24 @@ export function pruneLockfile(
           internalDeps,
           importerOutputDir,
           rewriteContext.workspacesDir,
+          rewriteContext.targetPackageName,
+          rewriteContext.outputDir,
         );
         rewrittenImporter.devDependencies = rewriteImporterDependencies(
           importerData.devDependencies,
           internalDeps,
           importerOutputDir,
           rewriteContext.workspacesDir,
+          rewriteContext.targetPackageName,
+          rewriteContext.outputDir,
         );
         rewrittenImporter.optionalDependencies = rewriteImporterDependencies(
           importerData.optionalDependencies,
           internalDeps,
           importerOutputDir,
           rewriteContext.workspacesDir,
+          rewriteContext.targetPackageName,
+          rewriteContext.outputDir,
         );
         pruned.importers[newImporterPath] = rewrittenImporter;
       } else {
