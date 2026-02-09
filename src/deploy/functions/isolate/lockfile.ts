@@ -55,6 +55,7 @@ function rewriteImporterDependencies(
   workspacesDir: string,
   targetPackageName: string,
   outputDir: string,
+  registry: WorkspaceRegistry,
 ): Record<string, DependencyEntry> | undefined {
   if (!deps) {
     return deps;
@@ -74,6 +75,20 @@ function rewriteImporterDependencies(
       result[depName] = {
         specifier: `file:${relativePath}`,
         version: `link:${relativePath}`,
+      };
+    } else if (depInfo.specifier?.startsWith("workspace:") && registry.has(depName)) {
+      const pkg = registry.get(depName)!;
+      const versionSpec = depInfo.specifier.slice("workspace:".length);
+      let newSpecifier: string;
+      if (versionSpec === "*" || versionSpec === "^" || versionSpec === "~") {
+        const prefix = versionSpec === "*" ? "" : versionSpec;
+        newSpecifier = `${prefix}${pkg.manifest.version}`;
+      } else {
+        newSpecifier = versionSpec;
+      }
+      result[depName] = {
+        specifier: newSpecifier,
+        version: depInfo.version,
       };
     } else {
       result[depName] = depInfo;
@@ -153,6 +168,7 @@ export function pruneLockfile(
           rewriteContext.workspacesDir,
           rewriteContext.targetPackageName,
           rewriteContext.outputDir,
+          registry,
         );
         rewrittenImporter.devDependencies = rewriteImporterDependencies(
           importerData.devDependencies,
@@ -161,6 +177,7 @@ export function pruneLockfile(
           rewriteContext.workspacesDir,
           rewriteContext.targetPackageName,
           rewriteContext.outputDir,
+          registry,
         );
         rewrittenImporter.optionalDependencies = rewriteImporterDependencies(
           importerData.optionalDependencies,
@@ -169,6 +186,7 @@ export function pruneLockfile(
           rewriteContext.workspacesDir,
           rewriteContext.targetPackageName,
           rewriteContext.outputDir,
+          registry,
         );
         pruned.importers[newImporterPath] = rewrittenImporter;
       } else {

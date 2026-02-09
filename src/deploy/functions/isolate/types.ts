@@ -30,7 +30,8 @@ export interface IsolateResult {
 
 export function getRelativePath(from: string, to: string): string {
   const path = require("path");
-  const relativePath = path.relative(from, to);
+  let relativePath = path.relative(from, to);
+  relativePath = relativePath.split(path.sep).join("/");
   if (!relativePath.startsWith(".")) {
     return `./${relativePath}`;
   }

@@ -37,6 +37,15 @@ export function rewriteWorkspaceDependencies(
         const depDir = path.join(workspacesDir, toSafeName(depName));
         const relativePath = getRelativePath(manifestDir, depDir);
         result[depName] = `file:${relativePath}`;
+      } else if (depVersion.startsWith("workspace:") && registry.has(depName)) {
+        const pkg = registry.get(depName)!;
+        const versionSpec = depVersion.slice("workspace:".length);
+        if (versionSpec === "*" || versionSpec === "^" || versionSpec === "~") {
+          const prefix = versionSpec === "*" ? "" : versionSpec;
+          result[depName] = `${prefix}${pkg.manifest.version}`;
+        } else {
+          result[depName] = versionSpec;
+        }
       } else {
         result[depName] = depVersion;
       }

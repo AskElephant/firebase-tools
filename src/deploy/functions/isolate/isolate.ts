@@ -27,9 +27,10 @@ function hasNodeModulesSegment(rootDir: string, filePath: string): boolean {
 function copyPackageSource(sourceDir: string, destDir: string): void {
   fs.ensureDirSync(destDir);
 
+  const outputDirName = path.basename(destDir);
   const items = fs.readdirSync(sourceDir);
   for (const item of items) {
-    if (item === "node_modules" || item === "_isolated_") {
+    if (item === "node_modules" || item === outputDirName) {
       continue;
     }
 
