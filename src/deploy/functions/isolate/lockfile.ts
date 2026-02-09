@@ -63,7 +63,7 @@ function rewriteImporterDependencies(
 
   const result: Record<string, DependencyEntry> = {};
   for (const [depName, depInfo] of Object.entries(deps)) {
-    if (depName === targetPackageName) {
+    if (depName === targetPackageName && depInfo.specifier?.startsWith("workspace:")) {
       const relativePath = getRelativePath(importerOutputDir, outputDir);
       result[depName] = {
         specifier: `file:${relativePath}`,
