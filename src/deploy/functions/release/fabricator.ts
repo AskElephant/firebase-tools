@@ -1,6 +1,6 @@
 import * as clc from "colorette";
 
-import { DEFAULT_RETRY_CODES, Executor } from "./executor";
+import { DEFAULT_RETRY_CODES, Executor, RunOptions } from "./executor";
 import { FirebaseError } from "../../../error";
 import { SourceTokenScraper } from "./sourceTokenScraper";
 import { Timer } from "./timer";
@@ -232,6 +232,14 @@ export class Fabricator {
     assertExhaustive(endpoint.platform);
   }
 
+  private runFunctionOperation<T>(
+    endpoint: backend.Endpoint,
+    func: () => Promise<T>,
+    opts?: RunOptions,
+  ): Promise<T> {
+    return this.functionExecutor.run(func, { ...opts, queueKey: endpoint.region });
+  }
+
   async createV1Function(endpoint: backend.Endpoint, scraper: SourceTokenScraper): Promise<void> {
     const sourceUrl = this.sources[endpoint.codebase!]?.sourceUrl;
     if (!sourceUrl) {
@@ -245,19 +253,17 @@ export class Fabricator {
     if (apiFunction.httpsTrigger) {
       apiFunction.httpsTrigger.securityLevel = "SECURE_ALWAYS";
     }
-    const resultFunction = await this.functionExecutor
-      .run(async () => {
-        // try to get the source token right before deploying
-        apiFunction.sourceToken = await scraper.getToken();
-        const op: { name: string } = await gcf.createFunction(apiFunction);
-        return poller.pollOperation<gcf.CloudFunction>({
-          ...gcfV1PollerOptions,
-          pollerName: `create-${endpoint.codebase}-${endpoint.region}-${endpoint.id}`,
-          operationResourceName: op.name,
-          onPoll: scraper.poller,
-        });
-      })
-      .catch(rethrowAs<gcf.CloudFunction>(endpoint, "create"));
+    const resultFunction = await this.runFunctionOperation(endpoint, async () => {
+      // try to get the source token right before deploying
+      apiFunction.sourceToken = await scraper.getToken();
+      const op: { name: string } = await gcf.createFunction(apiFunction);
+      return poller.pollOperation<gcf.CloudFunction>({
+        ...gcfV1PollerOptions,
+        pollerName: `create-${endpoint.codebase}-${endpoint.region}-${endpoint.id}`,
+        operationResourceName: op.name,
+        onPoll: scraper.poller,
+      });
+    }).catch(rethrowAs<gcf.CloudFunction>(endpoint, "create"));
 
     endpoint.uri = resultFunction?.httpsTrigger?.url;
     if (backend.isHttpsTriggered(endpoint)) {
@@ -373,35 +379,33 @@ export class Fabricator {
 
     let resultFunction: gcfV2.OutputCloudFunction | null = null;
     while (!resultFunction) {
-      resultFunction = await this.functionExecutor
-        .run(async () => {
-          if (experiments.isEnabled("functionsv2deployoptimizations")) {
-            apiFunction.buildConfig.sourceToken = await scraper.getToken();
-          }
-          const op: { name: string } = await gcfV2.createFunction(apiFunction);
-          return await poller.pollOperation<gcfV2.OutputCloudFunction>({
-            ...gcfV2PollerOptions,
-            pollerName: `create-${endpoint.codebase}-${endpoint.region}-${endpoint.id}`,
-            operationResourceName: op.name,
-            onPoll: scraper.poller,
-          });
-        })
-        .catch(async (err: any) => {
-          // Abort waiting on source token so other concurrent calls don't get stuck
-          scraper.abort();
-
-          // If the createFunction call returns RPC error code RESOURCE_EXHAUSTED (8),
-          // we have exhausted the underlying Cloud Run API quota. To retry, we need to
-          // first delete the GCF function resource, then call createFunction again.
-          if (err.code === CLOUD_RUN_RESOURCE_EXHAUSTED_CODE) {
-            // we have to delete the broken function before we can re-create it
-            await this.deleteV2Function(endpoint);
-            return null;
-          } else {
-            logger.error((err as Error).message);
-            throw new reporter.DeploymentError(endpoint, "create", err);
-          }
+      resultFunction = await this.runFunctionOperation(endpoint, async () => {
+        if (experiments.isEnabled("functionsv2deployoptimizations")) {
+          apiFunction.buildConfig.sourceToken = await scraper.getToken();
+        }
+        const op: { name: string } = await gcfV2.createFunction(apiFunction);
+        return await poller.pollOperation<gcfV2.OutputCloudFunction>({
+          ...gcfV2PollerOptions,
+          pollerName: `create-${endpoint.codebase}-${endpoint.region}-${endpoint.id}`,
+          operationResourceName: op.name,
+          onPoll: scraper.poller,
         });
+      }).catch(async (err: any) => {
+        // Abort waiting on source token so other concurrent calls don't get stuck
+        scraper.abort();
+
+        // If the createFunction call returns RPC error code RESOURCE_EXHAUSTED (8),
+        // we have exhausted the underlying Cloud Run API quota. To retry, we need to
+        // first delete the GCF function resource, then call createFunction again.
+        if (err.code === CLOUD_RUN_RESOURCE_EXHAUSTED_CODE) {
+          // we have to delete the broken function before we can re-create it
+          await this.deleteV2Function(endpoint);
+          return null;
+        } else {
+          logger.error((err as Error).message);
+          throw new reporter.DeploymentError(endpoint, "create", err);
+        }
+      });
     }
 
     endpoint.uri = resultFunction.url;
@@ -473,18 +477,16 @@ export class Fabricator {
     }
     const apiFunction = gcf.functionFromEndpoint(endpoint, sourceUrl);
 
-    const resultFunction = await this.functionExecutor
-      .run(async () => {
-        apiFunction.sourceToken = await scraper.getToken();
-        const op: { name: string } = await gcf.updateFunction(apiFunction);
-        return await poller.pollOperation<gcf.CloudFunction>({
-          ...gcfV1PollerOptions,
-          pollerName: `update-${endpoint.codebase}-${endpoint.region}-${endpoint.id}`,
-          operationResourceName: op.name,
-          onPoll: scraper.poller,
-        });
-      })
-      .catch(rethrowAs<gcf.CloudFunction>(endpoint, "update"));
+    const resultFunction = await this.runFunctionOperation(endpoint, async () => {
+      apiFunction.sourceToken = await scraper.getToken();
+      const op: { name: string } = await gcf.updateFunction(apiFunction);
+      return await poller.pollOperation<gcf.CloudFunction>({
+        ...gcfV1PollerOptions,
+        pollerName: `update-${endpoint.codebase}-${endpoint.region}-${endpoint.id}`,
+        operationResourceName: op.name,
+        onPoll: scraper.poller,
+      });
+    }).catch(rethrowAs<gcf.CloudFunction>(endpoint, "update"));
 
     endpoint.uri = resultFunction?.httpsTrigger?.url;
     let invoker: string[] | undefined;
@@ -521,27 +523,26 @@ export class Fabricator {
       delete apiFunction.eventTrigger.pubsubTopic;
     }
 
-    const resultFunction = await this.functionExecutor
-      .run(
-        async () => {
-          if (experiments.isEnabled("functionsv2deployoptimizations")) {
-            apiFunction.buildConfig.sourceToken = await scraper.getToken();
-          }
-          const op: { name: string } = await gcfV2.updateFunction(apiFunction);
-          return await poller.pollOperation<gcfV2.OutputCloudFunction>({
-            ...gcfV2PollerOptions,
-            pollerName: `update-${endpoint.codebase}-${endpoint.region}-${endpoint.id}`,
-            operationResourceName: op.name,
-            onPoll: scraper.poller,
-          });
-        },
-        { retryCodes: [...DEFAULT_RETRY_CODES, CLOUD_RUN_RESOURCE_EXHAUSTED_CODE] },
-      )
-      .catch((err: any) => {
-        scraper.abort();
-        logger.error((err as Error).message);
-        throw new reporter.DeploymentError(endpoint, "update", err);
-      });
+    const resultFunction = await this.runFunctionOperation(
+      endpoint,
+      async () => {
+        if (experiments.isEnabled("functionsv2deployoptimizations")) {
+          apiFunction.buildConfig.sourceToken = await scraper.getToken();
+        }
+        const op: { name: string } = await gcfV2.updateFunction(apiFunction);
+        return await poller.pollOperation<gcfV2.OutputCloudFunction>({
+          ...gcfV2PollerOptions,
+          pollerName: `update-${endpoint.codebase}-${endpoint.region}-${endpoint.id}`,
+          operationResourceName: op.name,
+          onPoll: scraper.poller,
+        });
+      },
+      { retryCodes: [...DEFAULT_RETRY_CODES, CLOUD_RUN_RESOURCE_EXHAUSTED_CODE] },
+    ).catch((err: any) => {
+      scraper.abort();
+      logger.error((err as Error).message);
+      throw new reporter.DeploymentError(endpoint, "update", err);
+    });
 
     endpoint.uri = resultFunction.serviceConfig?.uri;
     const serviceName = resultFunction.serviceConfig?.service;
@@ -587,64 +588,57 @@ export class Fabricator {
 
   async deleteV1Function(endpoint: backend.Endpoint): Promise<void> {
     const fnName = backend.functionName(endpoint);
-    await this.functionExecutor
-      .run(async () => {
-        const op: { name: string } = await gcf.deleteFunction(fnName);
-        const pollerOptions = {
-          ...gcfV1PollerOptions,
-          pollerName: `delete-${endpoint.codebase}-${endpoint.region}-${endpoint.id}`,
-          operationResourceName: op.name,
-        };
-        await poller.pollOperation<void>(pollerOptions);
-      })
-      .catch(rethrowAs(endpoint, "delete"));
+    await this.runFunctionOperation(endpoint, async () => {
+      const op: { name: string } = await gcf.deleteFunction(fnName);
+      const pollerOptions = {
+        ...gcfV1PollerOptions,
+        pollerName: `delete-${endpoint.codebase}-${endpoint.region}-${endpoint.id}`,
+        operationResourceName: op.name,
+      };
+      await poller.pollOperation<void>(pollerOptions);
+    }).catch(rethrowAs(endpoint, "delete"));
   }
 
   async deleteV2Function(endpoint: backend.Endpoint): Promise<void> {
     const fnName = backend.functionName(endpoint);
-    await this.functionExecutor
-      .run(
-        async () => {
-          const op: { name: string } = await gcfV2.deleteFunction(fnName);
-          const pollerOptions = {
-            ...gcfV2PollerOptions,
-            pollerName: `delete-${endpoint.codebase}-${endpoint.region}-${endpoint.id}`,
-            operationResourceName: op.name,
-          };
-          await poller.pollOperation<void>(pollerOptions);
-        },
-        { retryCodes: [...DEFAULT_RETRY_CODES, CLOUD_RUN_RESOURCE_EXHAUSTED_CODE] },
-      )
-      .catch(rethrowAs(endpoint, "delete"));
+    await this.runFunctionOperation(
+      endpoint,
+      async () => {
+        const op: { name: string } = await gcfV2.deleteFunction(fnName);
+        const pollerOptions = {
+          ...gcfV2PollerOptions,
+          pollerName: `delete-${endpoint.codebase}-${endpoint.region}-${endpoint.id}`,
+          operationResourceName: op.name,
+        };
+        await poller.pollOperation<void>(pollerOptions);
+      },
+      { retryCodes: [...DEFAULT_RETRY_CODES, CLOUD_RUN_RESOURCE_EXHAUSTED_CODE] },
+    ).catch(rethrowAs(endpoint, "delete"));
   }
 
   async setRunTraits(serviceName: string, endpoint: backend.Endpoint): Promise<void> {
-    await this.functionExecutor
-      .run(async () => {
-        const service = await run.getService(serviceName);
-        let changed = false;
-        if (service.spec.template.spec.containerConcurrency !== endpoint.concurrency) {
-          service.spec.template.spec.containerConcurrency = endpoint.concurrency;
-          changed = true;
-        }
+    await this.runFunctionOperation(endpoint, async () => {
+      const service = await run.getService(serviceName);
+      let changed = false;
+      if (service.spec.template.spec.containerConcurrency !== endpoint.concurrency) {
+        service.spec.template.spec.containerConcurrency = endpoint.concurrency;
+        changed = true;
+      }
 
-        if (+service.spec.template.spec.containers[0].resources.limits.cpu !== endpoint.cpu) {
-          service.spec.template.spec.containers[0].resources.limits.cpu = `${
-            endpoint.cpu as number
-          }`;
-          changed = true;
-        }
+      if (+service.spec.template.spec.containers[0].resources.limits.cpu !== endpoint.cpu) {
+        service.spec.template.spec.containers[0].resources.limits.cpu = `${endpoint.cpu as number}`;
+        changed = true;
+      }
 
-        if (!changed) {
-          logger.debug("Skipping setRunTraits on", serviceName, " because it already matches");
-          return;
-        }
+      if (!changed) {
+        logger.debug("Skipping setRunTraits on", serviceName, " because it already matches");
+        return;
+      }
 
-        // Without this there will be a conflict creating the new spec from the tempalte
-        delete service.spec.template.metadata.name;
-        await run.updateService(serviceName, service);
-      })
-      .catch(rethrowAs(endpoint, "set concurrency"));
+      // Without this there will be a conflict creating the new spec from the tempalte
+      delete service.spec.template.metadata.name;
+      await run.updateService(serviceName, service);
+    }).catch(rethrowAs(endpoint, "set concurrency"));
   }
 
   // Set/Delete trigger is responsible for wiring up a function with any trigger not owned

@@ -10,6 +10,7 @@ export interface Executor {
 
 export interface RunOptions {
   retryCodes?: number[];
+  queueKey?: string;
 }
 
 interface Operation {
@@ -58,9 +59,23 @@ async function handler(op: Operation): Promise<void> {
  * other errors are rethrown.
  */
 export class QueueExecutor implements Executor {
-  private readonly queue: Queue<Operation, void>;
-  constructor(options: Omit<ThrottlerOptions<Operation, void>, "handler">) {
-    this.queue = new Queue({ ...options, handler });
+  private readonly queues = new Map<string, Queue<Operation, void>>();
+
+  constructor(private readonly options: Omit<ThrottlerOptions<Operation, void>, "handler">) {}
+
+  private getQueue(queueKey?: string): Queue<Operation, void> {
+    const key = queueKey || "default";
+    let queue = this.queues.get(key);
+    if (!queue) {
+      const queueName = this.options.name || "queue";
+      queue = new Queue({
+        ...this.options,
+        handler,
+        name: queueKey ? `${queueName}:${queueKey}` : queueName,
+      });
+      this.queues.set(key, queue);
+    }
+    return queue;
   }
 
   async run<T>(func: () => Promise<T>, opts?: RunOptions): Promise<T> {
@@ -70,7 +85,7 @@ export class QueueExecutor implements Executor {
       func,
       retryCodes,
     };
-    await this.queue.run(op);
+    await this.getQueue(opts?.queueKey).run(op);
     if (op.error) {
       throw op.error;
     }
