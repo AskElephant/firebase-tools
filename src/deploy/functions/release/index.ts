@@ -19,7 +19,8 @@ import { release as extRelease } from "../../extensions";
 import * as artifacts from "../../../functions/artifacts";
 
 const GENERAL_DEPLOY_CONCURRENCY = 40;
-const FUNCTION_REGION_DEPLOY_CONCURRENCY = 5;
+const FUNCTION_REGION_DEPLOY_CONCURRENCY = 10;
+const FUNCTION_REGION_MUTATION_MIN_INTERVAL_MS = 1100;
 
 /** Releases new versions of functions and extensions to prod. */
 export async function release(
@@ -89,10 +90,12 @@ export async function release(
   const projectNumber = options.projectNumber || (await getProjectNumber(context.projectId));
   const fab = new fabricator.Fabricator({
     // Cloud Functions mutation quota is enforced per region, so we keep
-    // function create/update/delete requests in a much smaller per-region lane.
+    // function create/update/delete requests paced below the per-region quota
+    // while letting long-running operation polling proceed independently.
     functionExecutor: new executor.QueueExecutor({
       ...throttlerOptions,
       concurrency: FUNCTION_REGION_DEPLOY_CONCURRENCY,
+      minIntervalMs: FUNCTION_REGION_MUTATION_MIN_INTERVAL_MS,
     }),
     executor: new executor.QueueExecutor({
       ...throttlerOptions,

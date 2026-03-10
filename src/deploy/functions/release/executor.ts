@@ -1,5 +1,6 @@
 import { Queue } from "../../../throttler/queue";
 import { ThrottlerOptions } from "../../../throttler/throttler";
+import * as utils from "../../../utils";
 
 /**
  * An Executor runs lambdas (which may be async).
@@ -18,6 +19,10 @@ interface Operation {
   retryCodes: number[];
   result?: any;
   error?: any;
+}
+
+export interface QueueExecutorOptions extends Omit<ThrottlerOptions<Operation, void>, "handler"> {
+  minIntervalMs?: number;
 }
 
 export const DEFAULT_RETRY_CODES = [429, 409, 503];
@@ -60,8 +65,39 @@ async function handler(op: Operation): Promise<void> {
  */
 export class QueueExecutor implements Executor {
   private readonly queues = new Map<string, Queue<Operation, void>>();
+  private readonly nextStartTimes = new Map<string, number>();
+  private readonly queueReservations = new Map<string, Promise<void>>();
 
-  constructor(private readonly options: Omit<ThrottlerOptions<Operation, void>, "handler">) {}
+  constructor(private readonly options: QueueExecutorOptions) {}
+
+  private async pace(queueKey: string): Promise<void> {
+    const minIntervalMs = this.options.minIntervalMs;
+    if (!minIntervalMs) {
+      return;
+    }
+
+    const previousReservation = this.queueReservations.get(queueKey) || Promise.resolve();
+    let releaseReservation = (): void => undefined;
+    const currentReservation = new Promise<void>((resolve) => {
+      releaseReservation = resolve;
+    });
+    this.queueReservations.set(
+      queueKey,
+      previousReservation.then(() => currentReservation),
+    );
+
+    await previousReservation;
+    try {
+      const now = Date.now();
+      const nextStartTime = this.nextStartTimes.get(queueKey) || now;
+      if (nextStartTime > now) {
+        await utils.sleep(nextStartTime - now);
+      }
+      this.nextStartTimes.set(queueKey, Date.now() + minIntervalMs);
+    } finally {
+      releaseReservation();
+    }
+  }
 
   private getQueue(queueKey?: string): Queue<Operation, void> {
     const key = queueKey || "default";
@@ -70,7 +106,10 @@ export class QueueExecutor implements Executor {
       const queueName = this.options.name || "queue";
       queue = new Queue({
         ...this.options,
-        handler,
+        handler: async (op: Operation) => {
+          await this.pace(key);
+          await handler(op);
+        },
         name: queueKey ? `${queueName}:${queueKey}` : queueName,
       });
       this.queues.set(key, queue);

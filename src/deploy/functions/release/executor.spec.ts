@@ -126,5 +126,40 @@ describe("Executor", () => {
       release();
       await Promise.all([first, second]);
     });
+
+    it("paces starts within a keyed queue", async () => {
+      const keyedExec = new executor.QueueExecutor({
+        retries: 0,
+        concurrency: 3,
+        maxBackoff: 1,
+        backoff: 1,
+        minIntervalMs: 20,
+      });
+      const starts: number[] = [];
+
+      await Promise.all([
+        keyedExec.run(
+          async () => {
+            starts.push(Date.now());
+          },
+          { queueKey: "us-west3" },
+        ),
+        keyedExec.run(
+          async () => {
+            starts.push(Date.now());
+          },
+          { queueKey: "us-west3" },
+        ),
+        keyedExec.run(
+          async () => {
+            starts.push(Date.now());
+          },
+          { queueKey: "us-west3" },
+        ),
+      ]);
+
+      expect(starts[1] - starts[0]).to.be.at.least(15);
+      expect(starts[2] - starts[1]).to.be.at.least(15);
+    });
   });
 });
