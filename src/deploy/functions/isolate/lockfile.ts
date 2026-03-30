@@ -4,7 +4,7 @@ import * as yaml from "yaml";
 import { logger } from "../../../logger";
 import { WorkspaceRegistry, getRelativePath, toSafeName } from "./types";
 
-interface PnpmLockfile {
+export interface PnpmLockfile {
   lockfileVersion: string | number;
   importers?: Record<string, ImporterData>;
   packages?: Record<string, unknown>;
@@ -29,6 +29,11 @@ interface RewriteContext {
   targetPackageName: string;
 }
 
+export interface LockfileImporterSource {
+  importerPath: string;
+  lockfile: PnpmLockfile;
+}
+
 /**
  *
  */
@@ -43,9 +48,75 @@ export function readPnpmLockfile(workspaceRoot: string): PnpmLockfile | null {
     const content = fs.readFileSync(lockfilePath, "utf-8");
     return yaml.parse(content) as PnpmLockfile;
   } catch (err) {
-    logger.debug(`Failed to parse pnpm-lock.yaml: ${err}`);
+    logger.debug(`Failed to parse pnpm-lock.yaml: ${String(err)}`);
     return null;
   }
+}
+
+/**
+ *
+ */
+export function hasAllImporters(lockfile: PnpmLockfile, importerPaths: string[]): boolean {
+  if (!lockfile.importers) {
+    return false;
+  }
+
+  return importerPaths.every((importerPath) => !!lockfile.importers?.[importerPath]);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ *
+ */
+export function mergePackageLockfiles(sources: LockfileImporterSource[]): PnpmLockfile | null {
+  if (!sources.length) {
+    return null;
+  }
+
+  const merged: PnpmLockfile = {
+    lockfileVersion: sources[0].lockfile.lockfileVersion,
+    importers: {},
+  };
+
+  for (const { importerPath, lockfile } of sources) {
+    const importer = lockfile.importers?.["."];
+    if (!importer) {
+      continue;
+    }
+
+    if (!merged.importers) {
+      merged.importers = {};
+    }
+    merged.importers[importerPath] = importer;
+
+    if (lockfile.packages) {
+      merged.packages = {
+        ...(merged.packages ?? {}),
+        ...lockfile.packages,
+      };
+    }
+
+    for (const [key, value] of Object.entries(lockfile)) {
+      if (["lockfileVersion", "importers", "packages"].includes(key)) {
+        continue;
+      }
+
+      const existing = merged[key];
+      if (isRecord(existing) && isRecord(value)) {
+        merged[key] = {
+          ...existing,
+          ...value,
+        };
+      } else if (existing === undefined) {
+        merged[key] = value;
+      }
+    }
+  }
+
+  return Object.keys(merged.importers ?? {}).length ? merged : null;
 }
 
 function rewriteImporterDependencies(
@@ -77,7 +148,11 @@ function rewriteImporterDependencies(
         version: `link:${relativePath}`,
       };
     } else if (depInfo.specifier?.startsWith("workspace:") && registry.has(depName)) {
-      const pkg = registry.get(depName)!;
+      const pkg = registry.get(depName);
+      if (!pkg) {
+        result[depName] = depInfo;
+        continue;
+      }
       const versionSpec = depInfo.specifier.slice("workspace:".length);
       let newSpecifier: string;
       if (versionSpec === "*" || versionSpec === "^" || versionSpec === "~") {
