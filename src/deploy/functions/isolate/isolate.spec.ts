@@ -2,17 +2,23 @@ import { expect } from "chai";
 import * as fs from "fs-extra";
 import * as os from "os";
 import * as path from "path";
+import * as sinon from "sinon";
 import * as yaml from "yaml";
+import * as pack from "./pack";
 import { isolateWorkspace } from "./isolate";
+import { toSafeName } from "./types";
 
 describe("isolateWorkspace", () => {
   let tempDir: string;
+  let sandbox: sinon.SinonSandbox;
 
   beforeEach(() => {
+    sandbox = sinon.createSandbox();
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "firebase-tools-isolate-"));
   });
 
   afterEach(() => {
+    sandbox.restore();
     fs.removeSync(tempDir);
   });
 
@@ -93,6 +99,12 @@ packages:
       integrity: "sha512-serialize-error"
 `,
     );
+
+    sandbox.stub(pack, "packAndExtract").callsFake(async (pkg, workspacesDir) => {
+      const destDir = path.join(workspacesDir, toSafeName(pkg.name));
+      fs.copySync(pkg.absoluteDir, destDir);
+      return destDir;
+    });
 
     const outputDir = path.join(tempDir, "apps", "functions", "_isolated_");
     await isolateWorkspace({
