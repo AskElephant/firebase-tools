@@ -3,7 +3,14 @@ import * as fs from "fs-extra";
 import { FirebaseError } from "../../../error";
 import { logger } from "../../../logger";
 import { logLabeledBullet } from "../../../utils";
-import { IsolateOptions, IsolateResult, WorkspaceRegistry, toSafeName } from "./types";
+import {
+  IsolateOptions,
+  IsolateResult,
+  PackageManifest,
+  WorkspacePackage,
+  WorkspaceRegistry,
+  toSafeName,
+} from "./types";
 import {
   findWorkspaceRoot,
   buildWorkspaceRegistry,
@@ -12,7 +19,94 @@ import {
 } from "./registry";
 import { packAndExtract } from "./pack";
 import { rewriteWorkspaceDependencies, writeAdaptedManifest } from "./manifest";
-import { readPnpmLockfile, pruneLockfile, writePrunedLockfile } from "./lockfile";
+import {
+  hasAllImporters,
+  LockfileImporterSource,
+  mergePackageLockfiles,
+  PnpmLockfile,
+  readPnpmLockfile,
+  pruneLockfile,
+  writePrunedLockfile,
+} from "./lockfile";
+
+function getRelevantImporterPaths(
+  targetPackage: WorkspacePackage,
+  internalDeps: Set<string>,
+  registry: WorkspaceRegistry,
+): string[] {
+  const importerPaths: string[] = [targetPackage.rootRelativeDir];
+
+  for (const depName of internalDeps) {
+    const depPackage = registry.get(depName);
+    if (depPackage) {
+      importerPaths.push(depPackage.rootRelativeDir);
+    }
+  }
+
+  return importerPaths;
+}
+
+/**
+ *
+ */
+function resolveLockfileForIsolation(
+  workspaceRoot: string,
+  targetPackage: WorkspacePackage,
+  internalDeps: Set<string>,
+  registry: WorkspaceRegistry,
+): ReturnType<typeof readPnpmLockfile> {
+  const importerPaths = getRelevantImporterPaths(targetPackage, internalDeps, registry);
+  const workspaceLockfile = readPnpmLockfile(workspaceRoot);
+
+  if (workspaceLockfile && hasAllImporters(workspaceLockfile, importerPaths)) {
+    return workspaceLockfile;
+  }
+
+  if (workspaceLockfile) {
+    logger.debug(
+      `Workspace pnpm-lock.yaml is missing relevant importers (${importerPaths.join(", ")}), ` +
+        "falling back to package-local lockfiles",
+    );
+  }
+
+  const packageLockfiles: LockfileImporterSource[] = [];
+  const targetLockfile = readPnpmLockfile(targetPackage.absoluteDir);
+  if (!targetLockfile) {
+    logger.debug(`No package-local pnpm-lock.yaml found for ${targetPackage.name}`);
+    return workspaceLockfile;
+  }
+  packageLockfiles.push({
+    importerPath: targetPackage.rootRelativeDir,
+    lockfile: targetLockfile,
+  });
+
+  for (const depName of internalDeps) {
+    const depPackage = registry.get(depName);
+    if (!depPackage) {
+      continue;
+    }
+
+    const depLockfile = readPnpmLockfile(depPackage.absoluteDir);
+    if (!depLockfile) {
+      logger.debug(`No package-local pnpm-lock.yaml found for ${depPackage.name}`);
+      continue;
+    }
+
+    packageLockfiles.push({
+      importerPath: depPackage.rootRelativeDir,
+      lockfile: depLockfile,
+    });
+  }
+
+  if (packageLockfiles.length !== importerPaths.length) {
+    logger.debug(
+      `Only found ${packageLockfiles.length} package-local pnpm lockfile(s) for ` +
+        `${importerPaths.length} relevant importer(s)`,
+    );
+  }
+
+  return mergePackageLockfiles(packageLockfiles) ?? workspaceLockfile;
+}
 
 function hasNodeModulesSegment(rootDir: string, filePath: string): boolean {
   const relativePath = path.relative(rootDir, filePath);
@@ -48,6 +142,34 @@ function writePnpmWorkspaceYaml(outputDir: string): void {
   fs.writeFileSync(path.join(outputDir, "pnpm-workspace.yaml"), content, "utf-8");
 }
 
+function readPackageManifest(manifestPath: string): PackageManifest {
+  return fs.readJsonSync(manifestPath) as PackageManifest;
+}
+
+function getPatchedDependencies(manifest: PackageManifest): Record<string, string> | undefined {
+  const pnpmConfig = manifest["pnpm"];
+  if (!pnpmConfig || typeof pnpmConfig !== "object" || Array.isArray(pnpmConfig)) {
+    return undefined;
+  }
+
+  const patchedDependencies = (pnpmConfig as Record<string, unknown>)["patchedDependencies"];
+  if (
+    !patchedDependencies ||
+    typeof patchedDependencies !== "object" ||
+    Array.isArray(patchedDependencies)
+  ) {
+    return undefined;
+  }
+
+  return patchedDependencies as Record<string, string>;
+}
+
+function alignLockfileWithManifest(lockfile: PnpmLockfile, manifest: PackageManifest): void {
+  if (!getPatchedDependencies(manifest)) {
+    delete lockfile.patchedDependencies;
+  }
+}
+
 /**
  *
  */
@@ -68,6 +190,9 @@ function validateOutputDir(sourceDir: string, outputDir: string): void {
   }
 }
 
+/**
+ *
+ */
 export async function isolateWorkspace(options: IsolateOptions): Promise<IsolateResult> {
   const { sourceDir, outputDir, includeDevDependencies } = options;
 
@@ -124,7 +249,7 @@ export async function isolateWorkspace(options: IsolateOptions): Promise<Isolate
       const depManifestPath = path.join(depDir, "package.json");
 
       if (fs.existsSync(depManifestPath)) {
-        const depManifest = fs.readJsonSync(depManifestPath);
+        const depManifest = readPackageManifest(depManifestPath);
         const rewrittenDepManifest = rewriteWorkspaceDependencies(
           depManifest,
           registry,
@@ -142,18 +267,24 @@ export async function isolateWorkspace(options: IsolateOptions): Promise<Isolate
   }
 
   const targetManifestPath = path.join(outputDir, "package.json");
+  let rewrittenTargetManifest: PackageManifest | undefined;
   if (fs.existsSync(targetManifestPath)) {
-    const targetManifest = fs.readJsonSync(targetManifestPath);
-    const rewrittenManifest = rewriteWorkspaceDependencies(targetManifest, registry, internalDeps, {
+    const targetManifest = readPackageManifest(targetManifestPath);
+    rewrittenTargetManifest = rewriteWorkspaceDependencies(targetManifest, registry, internalDeps, {
       manifestDir: outputDir,
       workspacesDir,
       outputDir,
       targetPackageName: targetPackage.name,
     });
-    writeAdaptedManifest(rewrittenManifest, targetManifestPath);
+    writeAdaptedManifest(rewrittenTargetManifest, targetManifestPath);
   }
 
-  const lockfile = readPnpmLockfile(workspaceRoot);
+  const lockfile = resolveLockfileForIsolation(
+    workspaceRoot,
+    targetPackage,
+    internalDeps,
+    registry,
+  );
   if (lockfile) {
     const prunedLockfile = pruneLockfile(
       lockfile,
@@ -162,6 +293,9 @@ export async function isolateWorkspace(options: IsolateOptions): Promise<Isolate
       registry,
       { outputDir, workspacesDir, targetPackageName: targetPackage.name },
     );
+    if (rewrittenTargetManifest) {
+      alignLockfileWithManifest(prunedLockfile, rewrittenTargetManifest);
+    }
     writePrunedLockfile(prunedLockfile, path.join(outputDir, "pnpm-lock.yaml"));
   } else {
     logger.debug("No lockfile found, skipping lockfile pruning");
