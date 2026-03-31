@@ -1,5 +1,6 @@
 import { Queue } from "../../../throttler/queue";
 import { ThrottlerOptions } from "../../../throttler/throttler";
+import * as utils from "../../../utils";
 
 /**
  * An Executor runs lambdas (which may be async).
@@ -10,6 +11,7 @@ export interface Executor {
 
 export interface RunOptions {
   retryCodes?: number[];
+  queueKey?: string;
 }
 
 interface Operation {
@@ -17,6 +19,10 @@ interface Operation {
   retryCodes: number[];
   result?: any;
   error?: any;
+}
+
+export interface QueueExecutorOptions extends Omit<ThrottlerOptions<Operation, void>, "handler"> {
+  minIntervalMs?: number;
 }
 
 export const DEFAULT_RETRY_CODES = [429, 409, 503];
@@ -58,9 +64,57 @@ async function handler(op: Operation): Promise<void> {
  * other errors are rethrown.
  */
 export class QueueExecutor implements Executor {
-  private readonly queue: Queue<Operation, void>;
-  constructor(options: Omit<ThrottlerOptions<Operation, void>, "handler">) {
-    this.queue = new Queue({ ...options, handler });
+  private readonly queues = new Map<string, Queue<Operation, void>>();
+  private readonly nextStartTimes = new Map<string, number>();
+  private readonly queueReservations = new Map<string, Promise<void>>();
+
+  constructor(private readonly options: QueueExecutorOptions) {}
+
+  private async pace(queueKey: string): Promise<void> {
+    const minIntervalMs = this.options.minIntervalMs;
+    if (!minIntervalMs) {
+      return;
+    }
+
+    const previousReservation = this.queueReservations.get(queueKey) || Promise.resolve();
+    let releaseReservation = (): void => undefined;
+    const currentReservation = new Promise<void>((resolve) => {
+      releaseReservation = resolve;
+    });
+    this.queueReservations.set(
+      queueKey,
+      previousReservation.then(() => currentReservation),
+    );
+
+    await previousReservation;
+    try {
+      const now = Date.now();
+      const nextStartTime = this.nextStartTimes.get(queueKey) || now;
+      if (nextStartTime > now) {
+        await utils.sleep(nextStartTime - now);
+      }
+      this.nextStartTimes.set(queueKey, Date.now() + minIntervalMs);
+    } finally {
+      releaseReservation();
+    }
+  }
+
+  private getQueue(queueKey?: string): Queue<Operation, void> {
+    const key = queueKey || "default";
+    let queue = this.queues.get(key);
+    if (!queue) {
+      const queueName = this.options.name || "queue";
+      queue = new Queue({
+        ...this.options,
+        handler: async (op: Operation) => {
+          await this.pace(key);
+          await handler(op);
+        },
+        name: queueKey ? `${queueName}:${queueKey}` : queueName,
+      });
+      this.queues.set(key, queue);
+    }
+    return queue;
   }
 
   async run<T>(func: () => Promise<T>, opts?: RunOptions): Promise<T> {
@@ -70,7 +124,7 @@ export class QueueExecutor implements Executor {
       func,
       retryCodes,
     };
-    await this.queue.run(op);
+    await this.getQueue(opts?.queueKey).run(op);
     if (op.error) {
       throw op.error;
     }

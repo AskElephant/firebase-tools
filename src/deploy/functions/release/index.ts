@@ -18,6 +18,10 @@ import { getProjectNumber } from "../../../getProjectNumber";
 import { release as extRelease } from "../../extensions";
 import * as artifacts from "../../../functions/artifacts";
 
+const GENERAL_DEPLOY_CONCURRENCY = 40;
+const FUNCTION_REGION_DEPLOY_CONCURRENCY = 10;
+const FUNCTION_REGION_MUTATION_MIN_INTERVAL_MS = 1100;
+
 /** Releases new versions of functions and extensions to prod. */
 export async function release(
   context: args.Context,
@@ -80,14 +84,23 @@ export async function release(
   const throttlerOptions = {
     retries: 30,
     backoff: 20000,
-    concurrency: 40,
     maxBackoff: 100000,
   };
 
   const projectNumber = options.projectNumber || (await getProjectNumber(context.projectId));
   const fab = new fabricator.Fabricator({
-    functionExecutor: new executor.QueueExecutor(throttlerOptions),
-    executor: new executor.QueueExecutor(throttlerOptions),
+    // Cloud Functions mutation quota is enforced per region, so we keep
+    // function create/update/delete requests paced below the per-region quota
+    // while letting long-running operation polling proceed independently.
+    functionExecutor: new executor.QueueExecutor({
+      ...throttlerOptions,
+      concurrency: FUNCTION_REGION_DEPLOY_CONCURRENCY,
+      minIntervalMs: FUNCTION_REGION_MUTATION_MIN_INTERVAL_MS,
+    }),
+    executor: new executor.QueueExecutor({
+      ...throttlerOptions,
+      concurrency: GENERAL_DEPLOY_CONCURRENCY,
+    }),
     sources: context.sources,
     appEngineLocation: getAppEngineLocation(context.firebaseConfig),
     projectNumber: projectNumber,
